@@ -1,0 +1,4 @@
+# Downloaded sources and compiled output; build.sh recreates both.
+/build/
+/stage/
+.DS_Store

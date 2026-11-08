@@ -1,0 +1,74 @@
+#!/bin/sh
+# CUPS filter for the HP LaserJet P1102: PostScript in, ZjStream out.
+#
+# On Linux, foomatic-rip turns the PPD's options into foo2zjs-wrapper flags.
+# macOS has no foomatic-rip, so this does the same lookup: each enum option's
+# value comes from the job (argv[5]) or the PPD default, and its flags come from
+# the PPD's own "*FoomaticRIPOptionSetting Name=Value" line.
+
+# Only the driver's own folder and the system: under CUPS, /opt/homebrew was not reachable.
+PATH=/Library/Printers/foo2zjs/bin:/usr/bin:/bin
+export PATH
+
+if [ $# -lt 5 ] || [ $# -gt 6 ]; then
+    echo "Usage: $0 job-id user title copies options [file]" >&2
+    exit 1
+fi
+if [ -z "$PPD" ] || [ ! -r "$PPD" ]; then
+    echo "ERROR: PPD environment variable is not set or not readable" >&2
+    exit 1
+fi
+if [ ! -x /Library/Printers/foo2zjs/bin/gs ]; then
+    echo "ERROR: /Library/Printers/foo2zjs/bin/gs is missing; re-run build.sh and install.sh" >&2
+    exit 1
+fi
+
+flags=$(awk -v opts="$5" '
+function media_to_pagesize(m) {
+    m = tolower(m)
+    if (m ~ /a4/)     return "A4"
+    if (m ~ /letter/) return "Letter"
+    if (m ~ /legal/)  return "Legal"
+    if (m ~ /a5/)     return "A5"
+    if (m ~ /a6/)     return "A6"
+    if (m ~ /exec/)   return "Executive"
+    return ""
+}
+BEGIN {
+    n = split(opts, words, /[ \t]+/)
+    for (i = 1; i <= n; i++) {
+        eq = index(words[i], "=")
+        if (eq > 1) job[substr(words[i], 1, eq - 1)] = substr(words[i], eq + 1)
+    }
+}
+/^\*FoomaticRIPOption [A-Za-z0-9]+: enum CmdLine/ {
+    name = $2; sub(/:$/, "", name); enum_opts[name] = 1
+}
+/^\*Default[A-Za-z0-9]+: / {
+    name = $1; sub(/^\*Default/, "", name); sub(/:$/, "", name); def[name] = $2
+}
+/^\*FoomaticRIPOptionSetting / {
+    key = $2; sub(/:$/, "", key)
+    val = $0; sub(/^[^"]*"/, "", val); sub(/".*$/, "", val)
+    setting[key] = val
+}
+END {
+    if (!("PageSize" in job)) {
+        if ("PageRegion" in job) job["PageSize"] = job["PageRegion"]
+        else if ("media" in job && media_to_pagesize(job["media"]) != "")
+            job["PageSize"] = media_to_pagesize(job["media"])
+    }
+    out = ""
+    for (name in enum_opts) {
+        key = name "=" ((name in job) ? job[name] : def[name])
+        if (!(key in setting)) key = name "=" def[name]
+        if (key in setting) out = out " " setting[key]
+    }
+    print out
+}' "$PPD") || { echo "ERROR: could not read options from $PPD" >&2; exit 1; }
+
+echo "DEBUG: foo2zjs-cups: options [$5] -> flags [$flags]" >&2
+
+# Copies and N-up are done earlier in the CUPS chain (pstops), so they are not passed here.
+# shellcheck disable=SC2086  # $flags is a list of separate flags
+exec foo2zjs-wrapper -z2 -P -L0 -r1200x600 $flags ${6:+"$6"}

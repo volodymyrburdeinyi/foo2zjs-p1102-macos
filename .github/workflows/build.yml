@@ -1,0 +1,15 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Apple silicon runner; build.sh ends with an end-to-end filter self-test.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build driver and run self-test
+        run: ./build.sh
